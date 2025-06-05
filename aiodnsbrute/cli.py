@@ -44,16 +44,16 @@ class aioDNSBrute(object):
         """Handles the pycares object passed by the _dns_lookup function."""
         self.sem.release()
         err_number = None
+        err_text = None
         ips = []
         cname = False
         row = ""
         r = None
-        
         # Handle known exceptions, barf on other ones
         if future.exception() is not None:
             try:
                 err_number = future.exception().args[0]
-                # err_text = future.exception().args[1]  # Not used, so removed
+                err_text = future.exception().args[1]
             except (IndexError, AttributeError):
                 self.logger.error(f"Couldn't parse exception: {future.exception()}")
             if err_number == 4:
@@ -159,18 +159,11 @@ class aioDNSBrute(object):
                 )
                 wc_check = None
             finally:
-                # Handle both query and gethostbyname results
-                if wc_check is not None:
-                    if self.lookup_type == "query" and hasattr(wc_check, "__iter__"):
-                        self.ignore_hosts = [host.host for host in wc_check]
-                        self.logger.warn(
-                            f"Wildcard response detected, ignoring answers containing {self.ignore_hosts}"
-                        )
-                    elif self.lookup_type == "gethostbyname" and hasattr(wc_check, "addresses"):
-                        self.ignore_hosts = list(getattr(wc_check, "addresses", []))
-                        self.logger.warn(
-                            f"Wildcard response detected, ignoring answers containing {self.ignore_hosts}"
-                        )
+                if wc_check is not None and hasattr(wc_check, "__iter__"):
+                    self.ignore_hosts = [host.host for host in wc_check]
+                    self.logger.warn(
+                        f"Wildcard response detected, ignoring answers containing {self.ignore_hosts}"
+                    )
         else:
             self.logger.warn("Wildcard detection is disabled")
 
@@ -273,8 +266,6 @@ def main(**kwargs):
     query = bool(kwargs.get("query", True))
     resolvers = kwargs.get("resolver_file")
     outfile = kwargs.get("outfile", None)
-
-    # Ensure outfile is a valid file object or None
     if output != "off":
         # turn off output if we want JSON/CSV to stdout, hacky
         if outfile is not None and hasattr(outfile, "write"):
@@ -295,12 +286,11 @@ def main(**kwargs):
         query=query,
     )
 
-    # Only write output if outfile is a valid file object
-    if output == "json" and outfile is not None and hasattr(outfile, "write"):
+    if output == "json":
         import json
         json.dump(results, outfile)
 
-    if output == "csv" and outfile is not None and hasattr(outfile, "write"):
+    if output == "csv":
         import csv
         writer = csv.writer(outfile)
         writer.writerow(["Hostname", "IPs", "CNAME", "Aliases"])
