@@ -3,3 +3,4 @@ tqdm
 asyncio
 aiodns
 uvloop
+setuptools
