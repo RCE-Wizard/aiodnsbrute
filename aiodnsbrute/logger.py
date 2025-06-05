@@ -16,16 +16,16 @@ class ConsoleLogger(object):
         }
 
     def __getattr__(self, attr):
-        try:
+        if attr in self.msg_type:
             decorator = style(
                 f"{self.msg_type[attr][0]} ", fg=self.msg_type[attr][1], bold=True
             )
             msg_verbosity = self.msg_type[attr][2]
-        except KeyError:
+        else:
             decorator = ""
             msg_verbosity = 1
-        finally:
-            if self.verbosity >= msg_verbosity:
-                return lambda msg: tqdm.write(f"{decorator}{msg}")
-            else:
-                return lambda msg: None
+
+        if self.verbosity >= msg_verbosity:
+            return lambda msg: tqdm.write(f"{decorator}{msg}")
+        else:
+            return lambda msg: None

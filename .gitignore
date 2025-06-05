@@ -7,3 +7,7 @@ build/
 .tox/
 .coverage
 .cache/
+*.json
+*.csv
+.venv/
+*.code-workspace
