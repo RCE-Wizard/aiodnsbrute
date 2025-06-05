@@ -44,6 +44,67 @@ class aioDNSBrute(object):
         """Handles the pycares object passed by the _dns_lookup function."""
         self.sem.release()
         err_number = None
+        ips = []
+        cname = False
+        row = ""
+        r = None
+        # Handle known exceptions, barf on other ones
+        if future.exception() is not None:
+            try:
+                err_number = future.exception().args[0]
+                # err_text = future.exception().args[1]  # Not used, so removed
+            except (IndexError, AttributeError):
+                self.logger.error(f"Couldn't parse exception: {future.exception()}")
+            if err_number == 4:
+                pass  # Domain name not found
+            elif err_number == 12:
+                self.logger.warn(f"Timeout for {name}")
+            elif err_number == 1:
+                pass  # Server answered with no data
+            else:
+                self.logger.error(
+                    f"{name} generated an unexpected exception: {future.exception()}"
+                )
+        else:
+            if self.lookup_type == "query":
+                try:
+                    result = future.result()
+                    ips = [ip.host for ip in result]
+                    row = f"{name:<30}\t{ips}"
+                except Exception as e:
+                    self.logger.error(f"Error parsing query result for {name}: {e}")
+            elif self.lookup_type == "gethostbyname":
+                try:
+                    r = future.result()
+                    ips = [ip for ip in getattr(r, "addresses", [])]
+                    if name == getattr(r, "name", ""):
+                        cname = False
+                        n = f"""{name:<30}\t{f"{'':<35}" if self.verbosity >= 2 else ""}"""
+                    else:
+                        cname = True
+                        short_cname = f"{r.name[:28]}.." if len(r.name) > 30 else r.name
+                        n = f'{name}{"**" if self.verbosity <= 1 else ""}'
+                        n = f'''{n:<30}\t{f"CNAME {short_cname:<30}" if self.verbosity >= 2 else ""}'''
+                    row = f"{n:<30}\t{ips}"
+                except Exception as e:
+                    self.logger.error(f"Error parsing gethostbyname result for {name}: {e}")
+            # store the result
+            if set(ips) != set(self.ignore_hosts):
+                self.logger.success(row)
+                dns_lookup_result = {"domain": name, "ip": ips}
+                if self.lookup_type == "gethostbyname" and cname and r:
+                    dns_lookup_result["cname"] = getattr(r, "name", "")
+                    dns_lookup_result["aliases"] = getattr(r, "aliases", [])
+                self.fqdn.append(dns_lookup_result)
+            self.logger.debug(future.result())
+        if future in self.tasks:
+            self.tasks.remove(future)
+        if self.verbosity >= 1 and hasattr(self, "pbar"):
+            self.pbar.update()
+
+        """Handles the pycares object passed by the _dns_lookup function."""
+        self.sem.release()
+        err_number = None
         err_text = None
         ips = []
         cname = False
@@ -159,11 +220,18 @@ class aioDNSBrute(object):
                 )
                 wc_check = None
             finally:
-                if wc_check is not None and hasattr(wc_check, "__iter__"):
-                    self.ignore_hosts = [host.host for host in wc_check]
-                    self.logger.warn(
-                        f"Wildcard response detected, ignoring answers containing {self.ignore_hosts}"
-                    )
+                # Handle both query and gethostbyname results
+                if wc_check is not None:
+                    if self.lookup_type == "query" and hasattr(wc_check, "__iter__"):
+                        self.ignore_hosts = [host.host for host in wc_check]
+                        self.logger.warn(
+                            f"Wildcard response detected, ignoring answers containing {self.ignore_hosts}"
+                        )
+                    elif self.lookup_type == "gethostbyname" and hasattr(wc_check, "addresses"):
+                        self.ignore_hosts = list(getattr(wc_check, "addresses", []))
+                        self.logger.warn(
+                            f"Wildcard response detected, ignoring answers containing {self.ignore_hosts}"
+                        )
         else:
             self.logger.warn("Wildcard detection is disabled")
 
@@ -253,6 +321,7 @@ class aioDNSBrute(object):
 )
 @click.version_option("0.3.2")
 @click.argument("domain", required=True)
+
 def main(**kwargs):
     """aiodnsbrute is a command line tool for brute forcing domain names utilizing Python's asyncio module.
 
@@ -266,6 +335,8 @@ def main(**kwargs):
     query = bool(kwargs.get("query", True))
     resolvers = kwargs.get("resolver_file")
     outfile = kwargs.get("outfile", None)
+
+    # Ensure outfile is a valid file object or None
     if output != "off":
         # turn off output if we want JSON/CSV to stdout, hacky
         if outfile is not None and hasattr(outfile, "write"):
@@ -286,11 +357,12 @@ def main(**kwargs):
         query=query,
     )
 
-    if output == "json":
+    # Only write output if outfile is a valid file object
+    if output == "json" and outfile is not None and hasattr(outfile, "write"):
         import json
         json.dump(results, outfile)
 
-    if output == "csv":
+    if output == "csv" and outfile is not None and hasattr(outfile, "write"):
         import csv
         writer = csv.writer(outfile)
         writer.writerow(["Hostname", "IPs", "CNAME", "Aliases"])
